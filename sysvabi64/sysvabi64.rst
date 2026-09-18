@@ -26,6 +26,7 @@
 .. _ELFTLS: https://www.uclibc.org/docs/tls.pdf
 .. _TLSDESC: http://www.fsfla.org/~lxoliva/writeups/TLS/RFC-TLSDESC-ARM.txt
 .. _TLSDESCRES: https://github.com/ARM-software/abi-aa/tree/main/design-documents/tlsdesc-resolvers.txt
+.. _GLIBCMANUAL: https://sourceware.org/glibc/manual/
 
 .. role:: c(code)
    :language: c
@@ -273,6 +274,8 @@ This document refers to, or is referred to by, the following documents.
   | SYM-VER_        | http://people.redhat.com/drepper/symbol-versioning                | GNU Symbol Versioning                                                       |
   +-----------------+-------------------------------------------------------------------+-----------------------------------------------------------------------------+
   | TLSDESCRES_     | design-documents/tlsdesc-resolvers.rst                            | TLSDESC resolver function examples                                          |
+  +-----------------+-------------------------------------------------------------------+-----------------------------------------------------------------------------+
+  | GLIBCMANUAL_    | https://sourceware.org/glibc/manual/                              | The GNU C Library (glibc) manual                                            |
   +-----------------+-------------------------------------------------------------------+-----------------------------------------------------------------------------+
 
 Terms and Abbreviations
@@ -1440,34 +1443,39 @@ GNU Indirect Functions
 
 A GNU Indirect Function (IFUNC) is a feature that permits a single
 implementation of a function to be chosen from multiple candidates,
-with the choice taken by an IFUNC resolver function.
+with the choice taken by an IFUNC resolver function at runtime.
 
 GNU Indirect Functions require static and dynamic linker support. They
 are known to be supported on GNU/Linux, Android, and many of the BSD
 operating systems.
 
 GNU Indirect Functions are called via a PLT entry that loads the
-function address. The function address is chosen by an IFUNC resolver
-function.
+function address that is chosen by an IFUNC resolver function.
 
-The source code interface to an IFUNC resolver is platform
-dependent. The GNU/Linux interface via the GNU C Library is documented
-below.
+IFUNC resolver function must return an address of an implementation,
+however the interface of an IFUNC resolver function is architecture
+specific. The details of AArch64-specific interface of IFUNC resolver
+functions is described in the following section.
 
-GNU C Library IFUNC interface
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+In addition, when resolvers are invoked, the order of invocation, and
+what functionality is available to them are platform specific. The details
+of how GNU C library (glibc) invokes IFUNC resolvers is described in
+GLIBCMANUAL_. Other platforms may have different requirements and
+functionality available to the resolvers.
 
-The prototype of a GNU indirect function resolver is:
+AArch64 GNU IFUNC interface
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The prototype of a GNU indirect function resolver on AArch64 targets is:
 
 .. code-block:: c
 
    ElfW(Addr) ifunc_resolver (uint64_t, const uint64_t *);
 
-The resolver is passed at least one, and at most 2 parameters dependent
-on the GNU C Library (glibc) IFUNC ABI version. The bits in the first parameter
-will match the ``AT_HWCAP`` settings except for the ``_IFUNC_ARG_HWCAP`` bit
-that has special meaning: if this bit is set, then the second parameter is
-passed to the resolver function.
+The resolver is passed at least one, and at most 2 parameters. The bits
+in the first parameter will match the ``AT_HWCAP`` settings except for the
+``_IFUNC_ARG_HWCAP`` bit that has special meaning: if this bit is set,
+then the second parameter is passed to the resolver function.
 
 .. code-block:: c
 
@@ -1483,21 +1491,21 @@ fields:
    in bytes, this field is always present
 
 ``_hwcap``
-   A ``uint64_t`` value at byte offset 8 matching the AT_HWCAP settings,
+   A ``uint64_t`` value at byte offset 8 matching the ``AT_HWCAP`` settings,
    this field is always present
 
 ``_hwcap2``
-   A ``uint64_t`` value at byte offset 16 matching the AT_HWCAP2 settings,
+   A ``uint64_t`` value at byte offset 16 matching the ``AT_HWCAP2`` settings,
    this field is always present
 
 ``_hwcap3``
-   A ``uint64_t`` value at byte offset 24 matching the AT_HWCAP3 settings
+   A ``uint64_t`` value at byte offset 24 matching the ``AT_HWCAP3`` settings
 
 ``_hwcap4``
-   A ``uint64_t`` value at byte offset 32 matching the AT_HWCAP4 settings
+   A ``uint64_t`` value at byte offset 32 matching the ``AT_HWCAP4`` settings
 
 IFUNC resolver functions must use the value of the ``_size`` field to check
-how many HWCAP fields are available.
+how many HWCAP fields are available if they intend to use second parameter.
 
 The glibc header ``sys/ifunc.h`` provides the necessary type definitions
 that may be used by IFUNC resolvers. Namely, the ``__ifunc_arg_t`` struct is
@@ -1526,41 +1534,16 @@ the GCC and Clang compilers an attribute can be used to achieve this.
   /* Make symbol ifunc type STT_GNU_IFUNC using resolver as the IFUNC resolver. */
   int ifunc(void) __attribute__((ifunc("resolver")));
 
-The IFUNC resolver function returns the address of the function
-implementation.
+An IFUNC must be defined in the same translation unit as its resolver.
+An IFUNC cannot not be weak (must not have a symbol binding of ``STB_WEAK``).
 
-IFUNC resolvers may be run when the dynamic linker is resolving relocations.
-additional restrictions on what they can contain.
-
- * IFUNC resolvers must not be compiled with security features like
-   stack-protection, which requires a guard variable to be
-   initialized. Or instrumentation like ASAN that requires a shadow
-   map to be set up.
-
- * IFUNC resolvers must not have a symbol binding of ``STB_WEAK``.
-
-The order of dynamic relocation resolution across an executable and
-all its shared libraries is platform specific. The following
-recommendations for writing IFUNC resolvers apply to the GNU glibc
-dynamic loader. Other dynamic linkers may have fewer requirements.
-
- * An IFUNC resolver function must not call a function that may itself
-   require IFUNC initialization. If the IFUNC initialization for the
-   called function has not occurred then undefined behavior results.
-
- * In position-independent code an IFUNC resolver functions must not
-   call a function that requires a PLT entry. If the IFUNC resolver
-   runs as a result of a relocation in ``.rela.dyn`` then the
-   relocations in ``.rela.plt`` will not have been resolved. This means
-   that addresses in the ``.got.plt`` will be unchanged from their
-   static link time value.
-
- * The IFUNC resolver function for a given function must be defined in
-   the same translation unit as the implementations of the function.
-
- * IFUNC resolver functions must be idempotent. There can be
-   relocations in both ``.rela.dyn`` and ``.rela.plt`` to the same
-   IFUNC resolver function.
+An IFUNC resolver function for a given function must be defined in
+the same translation unit as the implementations of the function.
+A resolver function may be invoked multiple times and it may also be
+invoked concurrently. This means that it must always return the same
+value and it must avoid side effects and must not rely on any specific
+order or resolving relocations or other IFUNC functions or global
+objects.
 
 IFUNC requirements for static linkers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1781,7 +1764,7 @@ prototype:
    void __init_cpu_features_resolver (uint64_t, const uint64_t *);
 
 This interface expects the same parameters as a GNU Indirect
-Function resolver. See `GNU C Library IFUNC interface`_. Other
+Function resolver. See `AArch64 GNU IFUNC interface`_. Other
 platforms may use a different interface with the runtime library.
 However, all implementations must provide a DSO-local definition
 of the function by setting the symbol visibility to ``STV_HIDDEN``.
